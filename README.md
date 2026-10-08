@@ -2,17 +2,20 @@
 
 Tracks delivery vehicles in real time and alerts the manager when a driver leaves the planned route, stops moving, hits heavy traffic, goes silent, or arrives.
 
-Express 5, MongoDB (Mongoose), Socket.IO, Redis, Mapbox Directions, Firebase Cloud Messaging.
+TypeScript, Express 5, MongoDB (Mongoose), Socket.IO, Redis, Mapbox Directions, Firebase Cloud Messaging.
 
 ## Running it
 
 ```bash
 npm install
 cp .env.example .env   # optional in development
-npm run dev            # http://localhost:5000
+npm run dev            # http://localhost:5000, restarts on change
 npm run simulate       # in a second terminal: drives a fake delivery end to end
 npm test
+npm run typecheck
 ```
+
+For production, `npm run build` compiles `src/` to `dist/` and `npm start` runs it.
 
 The server starts with an empty `.env`. Each missing service has a development fallback:
 
@@ -122,6 +125,8 @@ const socket = io("http://localhost:5000", { auth: { token } });
 
 A bad or missing token fails the connection with `connect_error`.
 
+Every event and payload below is typed in [src/types/events.ts](src/types/events.ts). The file imports nothing, so a TypeScript frontend can copy it and type its socket as `Socket<ServerToClientEvents, ClientToServerEvents>`.
+
 ### Driver app sends
 
 ```js
@@ -146,13 +151,14 @@ Send every 5 to 10 seconds while the trip is `in_progress`. Stop when `reply.sta
 ## Layout
 
 ```
-server.js            entry point: database, HTTP, sockets, signal monitor
-app.js               express app
-config/              env, database, redis store, mapbox, firebase
-models/              User, Vehicle, Trip, LocationPing, Alert
-controllers/ routes/ REST API
-services/tracking    detection for every location ping
-services/alert       stores an alert, emits it, sends the push
-sockets/             socket auth and the location:update event
-scripts/simulate.js  fake delivery for testing without a frontend
+src/server.ts            entry point: database, HTTP, sockets, signal monitor
+src/app.ts               express app
+src/config/              env, database, redis store, mapbox, firebase
+src/models/              User, Vehicle, Trip, LocationPing, Alert
+src/controllers/ routes/ REST API
+src/services/tracking    detection for every location ping
+src/services/alert       stores an alert, emits it, sends the push
+src/sockets/             socket auth and the location:update event
+src/types/events.ts      socket event types, shareable with the frontend
+scripts/simulate.ts      fake delivery for testing without a frontend
 ```
