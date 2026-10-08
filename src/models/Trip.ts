@@ -1,7 +1,8 @@
 import { Schema, model, type HydratedDocument, type Types } from "mongoose";
-import type { TripFlags, TripStatus } from "../types/events";
+import type { BatteryReading, TrackingEventType, TripFlags, TripStatus } from "../types/events";
 import type { Position } from "../utils/geo";
 import { pointSchema, type GeoPoint } from "./point.schema";
+import { TRACKING_EVENT_TYPES, batterySchema } from "./TrackingEvent";
 
 export const TRIP_STATUSES: TripStatus[] = [
   "pending",
@@ -40,6 +41,15 @@ export interface LastLocation {
   recordedAt: Date;
 }
 
+// Latest state of the driver's phone, so a manager can judge why a trip went quiet
+export interface DeviceTracking {
+  battery?: BatteryReading;
+  batteryAt?: Date;
+  // When the last location ping arrived
+  lastSeenAt?: Date;
+  lastEvent?: { type: TrackingEventType; recordedAt: Date };
+}
+
 export interface ITrip {
   manager: Types.ObjectId;
   driver: Types.ObjectId;
@@ -52,6 +62,7 @@ export interface ITrip {
   status: TripStatus;
   route?: TripRoute;
   lastLocation?: LastLocation;
+  tracking?: DeviceTracking;
   eta?: Date;
   flags: TripFlags;
   startedAt?: Date;
@@ -99,6 +110,15 @@ const tripSchema = new Schema<ITrip>(
       heading: Number,
       accuracy: Number,
       recordedAt: Date,
+    },
+    tracking: {
+      battery: batterySchema,
+      batteryAt: Date,
+      lastSeenAt: Date,
+      lastEvent: {
+        type: { type: String, enum: TRACKING_EVENT_TYPES },
+        recordedAt: Date,
+      },
     },
     eta: Date,
     flags: {

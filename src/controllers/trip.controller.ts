@@ -1,6 +1,8 @@
 import type { Request, Response } from "express";
 import * as mapbox from "../config/mapbox";
+import { env } from "../config/env";
 import { LocationPing } from "../models/LocationPing";
+import { TrackingEvent } from "../models/TrackingEvent";
 import {
   CLEAR_FLAGS,
   TRIP_STATUSES,
@@ -16,7 +18,7 @@ import * as tracking from "../services/tracking.service";
 import type { TripStatus } from "../types/events";
 import { ApiError } from "../utils/ApiError";
 import { haversineDistance, type Position } from "../utils/geo";
-import { pagination, parseLatLng, requireObjectId } from "../utils/validate";
+import { pagination, parseBattery, parseLatLng, requireObjectId } from "../utils/validate";
 
 const POPULATE = [
   { path: "driver", select: "name email phone" },
@@ -152,14 +154,29 @@ export async function startTrip(req: Request, res: Response): Promise<void> {
     Trip.exists({ driver: trip.driver, status: "in_progress" }),
     Trip.exists({ vehicle: trip.vehicle, status: "in_progress" }),
   ]);
-  if (driverBusy) throw new ApiError(409, "You already have a trip in progress");
-  if (vehicleBusy) throw new ApiError(409, "This vehicle is already on a trip");
+  if (driverBusy) {
+    throw new ApiError(409, "You already have a trip in progress", "trip-in-progress");
+  }
+  if (vehicleBusy) throw new ApiError(409, "This vehicle is already on a trip", "vehicle-in-use");
+
+  // A phone that dies mid-trip takes the tracking with it. Not enforced where
+  // the browser cannot report battery (iOS, Firefox).
+  const minBattery = env.tracking.minStartBattery;
+  const battery = parseBattery(req.body?.battery);
+  if (battery && !battery.charging && battery.level < minBattery) {
+    throw new ApiError(
+      409,
+      `Battery is at ${battery.level}%. Charge to at least ${minBattery}% or plug in before starting a trip`,
+      "low-battery",
+    );
+  }
 
   trip.status = "in_progress";
   trip.startedAt = new Date();
   if (trip.route?.durationSeconds) {
     trip.eta = new Date(Date.now() + trip.route.durationSeconds * 1000);
   }
+  if (battery) trip.tracking = { battery, batteryAt: trip.startedAt };
   await trip.save();
   await tracking.initTrip(trip.id);
 
@@ -171,6 +188,15 @@ export async function completeTrip(req: Request, res: Response): Promise<void> {
   const trip = await findTrip(req);
   if (trip.status !== "in_progress" && trip.status !== "arrived") {
     throw new ApiError(409, `Trip is ${trip.status} and cannot be completed`);
+  }
+  // A driver can only mark a delivery done at the destination. A manager can
+  // still close a trip early.
+  if (req.user.role === "driver" && trip.status !== "arrived") {
+    throw new ApiError(
+      409,
+      "You have not reached the destination yet",
+      "destination-not-reached",
+    );
   }
   trip.status = "completed";
   trip.completedAt = new Date();
@@ -203,6 +229,24 @@ export async function postLocation(req: Request, res: Response): Promise<void> {
   res.status(201).json({ data: result });
 }
 
+export async function postTrackingEvent(req: Request, res: Response): Promise<void> {
+  await tracking.recordTrackingEvent(req.params.id, req.user._id, req.body);
+  res.status(204).end();
+}
+
+// What the driver's phone reported during the trip, oldest first
+export async function listTrackingEvents(req: Request, res: Response): Promise<void> {
+  const trip = await findTrip(req);
+  const events = await TrackingEvent.find({ trip: trip._id }).sort({ recordedAt: 1 }).lean();
+  res.json({
+    data: events.map((event) => ({
+      type: event.type,
+      battery: event.battery ?? null,
+      recordedAt: event.recordedAt,
+    })),
+  });
+}
+
 // The path the vehicle actually took, oldest first
 export async function listLocations(req: Request, res: Response): Promise<void> {
   const trip = await findTrip(req);
@@ -222,6 +266,7 @@ export async function listLocations(req: Request, res: Response): Promise<void> 
       speed: ping.speed ?? null,
       heading: ping.heading ?? null,
       accuracy: ping.accuracy ?? null,
+      battery: ping.battery ?? null,
       recordedAt: ping.recordedAt,
     })),
   });

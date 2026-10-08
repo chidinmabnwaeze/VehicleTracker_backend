@@ -1,5 +1,7 @@
 import { Schema, model, type Types } from "mongoose";
+import type { BatteryReading } from "../types/events";
 import { pointSchema, type GeoPoint } from "./point.schema";
+import { batterySchema } from "./TrackingEvent";
 
 export interface ILocationPing {
   trip: Types.ObjectId;
@@ -8,6 +10,7 @@ export interface ILocationPing {
   speed?: number; // meters per second
   heading?: number; // degrees from north
   accuracy?: number; // meters
+  battery?: BatteryReading;
   recordedAt: Date;
   createdAt: Date;
 }
@@ -20,6 +23,7 @@ const locationPingSchema = new Schema<ILocationPing>(
     speed: Number,
     heading: Number,
     accuracy: Number,
+    battery: batterySchema,
     recordedAt: { type: Date, required: true },
   },
   { timestamps: { createdAt: true, updatedAt: false } },

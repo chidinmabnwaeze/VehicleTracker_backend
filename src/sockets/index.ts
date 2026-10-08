@@ -4,7 +4,7 @@ import { env } from "../config/env";
 import { bearerToken, userFromToken } from "../middleware/auth";
 import * as realtime from "../services/realtime.service";
 import * as tracking from "../services/tracking.service";
-import type { LocationAck } from "../types/events";
+import type { LocationAck, TrackingEventAck } from "../types/events";
 import { ApiError } from "../utils/ApiError";
 
 export function initSockets(httpServer: HttpServer): realtime.TrackerServer {
@@ -44,6 +44,26 @@ export function initSockets(httpServer: HttpServer): realtime.TrackerServer {
         reply({
           ok: false,
           error: expected ? err.message : "Could not process location update",
+        });
+      }
+    });
+
+    // Driver app: socket.emit("tracking:event", { tripId, type, battery }, ack)
+    socket.on("tracking:event", async (payload, ack) => {
+      const reply = typeof ack === "function" ? ack : (_reply: TrackingEventAck) => {};
+      if (user.role !== "driver") {
+        reply({ ok: false, error: "Only drivers can send tracking events" });
+        return;
+      }
+      try {
+        await tracking.recordTrackingEvent(payload?.tripId, user._id, payload);
+        reply({ ok: true });
+      } catch (err) {
+        const expected = err instanceof ApiError;
+        if (!expected) console.error("[socket] tracking:event", err);
+        reply({
+          ok: false,
+          error: expected ? err.message : "Could not process tracking event",
         });
       }
     });

@@ -41,16 +41,28 @@ The server starts with an empty `.env`. Each missing service has a development f
 | `deviation` | critical | More than 200 m from the planned route for 2 pings in a row |
 | `stationary` | warning | Within a 30 m radius for 5 minutes |
 | `traffic` | warning | Mapbox says the remaining drive is at least 5 minutes and 25% slower than usual (checked every 2 minutes, at most one alert per 15 minutes) |
-| `signal_lost` | critical | No ping for 3 minutes during a trip |
+| `signal_lost` | critical | No ping for 3 minutes during a trip. The message includes the phone's last battery reading and last tracking report, e.g. "Last report: the app was sent to the background. Last battery reading: 7%." |
 | `arrival` | info | Within 100 m of the destination. The trip becomes `arrived`. |
 
 Each alert fires once when the condition begins. It can fire again only after the condition has cleared. The current state is always in the trip's `flags` (`deviated`, `stationary`, `traffic`, `signalLost`), which are included in every `trip:location` event, so the frontend can clear a banner when a flag goes back to `false`.
 
+## Driver device safeguards
+
+These are the server side of the checks the driver app already makes. The server repeats them because a client check can be skipped.
+
+| Safeguard | Behaviour |
+| --- | --- |
+| Low battery at start | `POST /trips/:id/start` with `battery` below 30% and not charging is rejected with code `low-battery`. Not enforced when no battery is sent, since iOS and Firefox cannot report it. Threshold: `MIN_START_BATTERY`. |
+| One trip at a time | Starting a second trip is rejected with code `trip-in-progress`. |
+| Delivered only at the destination | A driver can complete a trip only once it is `arrived`; otherwise code `destination-not-reached`. A manager can still close a trip early. |
+| Battery tracking | Each ping may carry `battery`. The latest reading is kept on the trip as `tracking.battery`, alongside `tracking.lastSeenAt`. |
+| Tracking interruptions | The app reports `backgrounded`, `resumed`, `offline`, `online`, `location-denied` and `location-unavailable`. They are stored, relayed to the manager as `trip:tracking`, and the latest is kept as `tracking.lastEvent`. |
+
 ## Conventions
 
 - Base URL is `/api`. Send `Authorization: Bearer <token>` on everything except register and login.
-- Success responses are `{ "data": ..., "meta": ... }`. Errors are `{ "message": "...", "details": [...] }` with a 4xx or 5xx status.
-- **Coordinates:** requests and socket events use `lat` and `lng`. Stored documents (trips, alerts) use GeoJSON, which is `[lng, lat]`. Mapbox GL takes that order directly.
+- Success responses are `{ "data": ..., "meta": ... }`. Errors are `{ "message": "..." }` with a 4xx or 5xx status, plus a stable `code` where the frontend needs to branch (`low-battery`, `trip-in-progress`, `vehicle-in-use`, `destination-not-reached`).
+- **Coordinates:** requests and socket events use `lat` and `lng` (`latitude` and `longitude` are also accepted, as is `recordedAt` for `timestamp`). Stored documents (trips, alerts) use GeoJSON, which is `[lng, lat]`. Mapbox GL takes that order directly.
 - List endpoints accept `page` and `limit` (max 100).
 - Speed is in meters per second, heading in degrees, accuracy and distances in meters.
 
@@ -89,9 +101,11 @@ Each alert fires once when the condition begins. It can fire again only after th
 | GET | `/trips` | both | Managers see their trips, drivers the ones assigned to them. Query: `status` (comma separated), `driverId`, `vehicleId`. The route geometry is left out of lists. |
 | GET | `/trips/:id` | both | Includes `route.geometry` to draw the planned route. |
 | GET | `/trips/:id/locations` | both | The path actually driven, oldest first. Query: `since`, `limit` (max 5000). |
-| POST | `/trips/:id/start` | driver | `pending` to `in_progress`. |
+| POST | `/trips/:id/start` | driver | `pending` to `in_progress`. Optional body: `{ "battery": { "level": 82, "charging": false } }`. |
 | POST | `/trips/:id/location` | driver | HTTP fallback for the socket event, same body. |
-| POST | `/trips/:id/complete` | both | `in_progress` or `arrived` to `completed`. |
+| POST | `/trips/:id/events` | driver | Tracking interruption. Body: `type`, `battery?`, `timestamp?`. |
+| GET | `/trips/:id/events` | both | Tracking interruptions for the trip, oldest first. |
+| POST | `/trips/:id/complete` | both | To `completed`. Drivers need the trip to be `arrived`; managers can also complete an `in_progress` trip. |
 | POST | `/trips/:id/cancel` | manager | |
 
 ```json
@@ -132,20 +146,25 @@ Every event and payload below is typed in [src/types/events.ts](src/types/events
 ```js
 socket.emit(
   "location:update",
-  { tripId, lat, lng, speed, heading, accuracy, timestamp }, // only tripId, lat, lng are required
+  { tripId, lat, lng, speed, heading, accuracy, battery, timestamp }, // only tripId, lat, lng are required
   (reply) => {} // { ok: true, status, flags } or { ok: false, error }
 );
 ```
 
-Send every 5 to 10 seconds while the trip is `in_progress`. Stop when `reply.status` is `arrived`.
+Send every 5 to 15 seconds while the trip is `in_progress`, even when not moving. Stop when `reply.status` is `arrived`. `reply.flags.deviated` tells the driver app when to show its own off-route warning.
+
+```js
+socket.emit("tracking:event", { tripId, type: "backgrounded", battery, timestamp }, (reply) => {});
+```
 
 ### Server sends
 
 | Event | To | Payload |
 | --- | --- | --- |
-| `trip:location` | manager | `tripId, driverId, vehicleId, lat, lng, speed, heading, accuracy, recordedAt, flags, distanceFromRouteMeters, distanceToDestinationMeters` |
+| `trip:location` | manager | `tripId, driverId, vehicleId, lat, lng, speed, heading, accuracy, battery, recordedAt, flags, distanceFromRouteMeters, distanceToDestinationMeters` |
 | `trip:status` | manager, driver | `tripId, status, at, eta` on create, start, arrival, complete and cancel |
 | `trip:update` | manager, driver | `tripId, flags` and, after a traffic check, `eta, remainingDistanceMeters, remainingDurationSeconds, trafficDelaySeconds` |
+| `trip:tracking` | manager | `tripId, type, battery, recordedAt` when the driver's phone reports an interruption |
 | `alert:new` | manager | The stored alert: `id, type, severity, title, message, trip, driver, vehicle, location, meta, createdAt` |
 
 ## Layout

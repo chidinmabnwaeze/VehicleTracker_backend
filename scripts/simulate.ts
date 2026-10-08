@@ -116,6 +116,9 @@ async function main(): Promise<void> {
   managerSocket.on("trip:update", (event) =>
     console.log("[manager] trip:update ->", JSON.stringify(event)),
   );
+  managerSocket.on("trip:tracking", (event) =>
+    console.log(`[manager] trip:tracking -> ${event.type}, battery ${event.battery?.level}%`),
+  );
   managerSocket.on("alert:new", (alert) => {
     seen.push(alert.type);
     console.log(`[manager] alert:new  -> ${alert.type} (${alert.severity}): ${alert.message}`);
@@ -125,7 +128,9 @@ async function main(): Promise<void> {
     email: `driver.${stamp}@example.com`,
     password,
   });
-  const trip = await api<TripResponse>("POST", `/trips/${created.id}/start`, driverLogin.token);
+  const trip = await api<TripResponse>("POST", `/trips/${created.id}/start`, driverLogin.token, {
+    battery: { level: 82, charging: false },
+  });
   const driverSocket = await connect(driverLogin.token);
 
   const pings = buildPings(samplePath(trip.route.geometry.coordinates));
@@ -136,9 +141,18 @@ async function main(): Promise<void> {
       ...pings[i],
       speed: 12,
       accuracy: 8,
+      battery: { level: Math.max(5, 82 - Math.floor(i / 4)), charging: false },
       timestamp: new Date(startTime + i * PING_GAP_SECONDS * 1000).toISOString(),
     });
     if (!reply.ok) throw new Error(`location:update rejected: ${reply.error}`);
+    // The driver switches to another app for a moment
+    if (i === 10 || i === 12) {
+      await driverSocket.emitWithAck("tracking:event", {
+        tripId: trip.id,
+        type: i === 10 ? "backgrounded" : "resumed",
+        battery: { level: 80, charging: false },
+      });
+    }
     await sleep(SEND_EVERY_MS);
   }
   await sleep(500);

@@ -7,6 +7,23 @@ export type TripStatus = "pending" | "in_progress" | "arrived" | "completed" | "
 export type AlertType = "deviation" | "stationary" | "traffic" | "signal_lost" | "arrival";
 export type AlertSeverity = "info" | "warning" | "critical";
 
+// The driver's phone battery. Browsers without the Battery API (iOS, Firefox)
+// cannot report it, so it is null or absent wherever it appears.
+export interface BatteryReading {
+  // 0 to 100
+  level: number;
+  charging: boolean;
+}
+
+// Why tracking was interrupted or resumed, as far as the driver's browser can tell
+export type TrackingEventType =
+  | "backgrounded"
+  | "resumed"
+  | "offline"
+  | "online"
+  | "location-denied"
+  | "location-unavailable";
+
 export interface TripFlags {
   deviated: boolean;
   stationary: boolean;
@@ -22,8 +39,19 @@ export interface LocationUpdatePayload {
   speed?: number;
   heading?: number;
   accuracy?: number;
+  battery?: BatteryReading | null;
   timestamp?: string | number;
 }
+
+// Driver -> server, when the app is backgrounded, goes offline or loses location
+export interface TrackingEventPayload {
+  tripId: string;
+  type: TrackingEventType;
+  battery?: BatteryReading | null;
+  timestamp?: string | number;
+}
+
+export type TrackingEventAck = { ok: true } | { ok: false; error: string };
 
 export interface LocationResult {
   status: TripStatus;
@@ -44,6 +72,7 @@ export interface TripLocationEvent {
   speed: number | null;
   heading: number | null;
   accuracy: number | null;
+  battery: BatteryReading | null;
   recordedAt: string;
   flags: TripFlags;
   distanceFromRouteMeters: number | null;
@@ -68,6 +97,14 @@ export interface TripUpdateEvent {
   trafficDelaySeconds?: number;
 }
 
+// Server -> manager, relaying what the driver's phone reported
+export interface TripTrackingEvent {
+  tripId: string;
+  type: TrackingEventType;
+  battery: BatteryReading | null;
+  recordedAt: string;
+}
+
 // Server -> manager
 export interface AlertEvent {
   id: string;
@@ -89,9 +126,14 @@ export interface ServerToClientEvents {
   "trip:location": (event: TripLocationEvent) => void;
   "trip:status": (event: TripStatusEvent) => void;
   "trip:update": (event: TripUpdateEvent) => void;
+  "trip:tracking": (event: TripTrackingEvent) => void;
   "alert:new": (alert: AlertEvent) => void;
 }
 
 export interface ClientToServerEvents {
   "location:update": (payload: LocationUpdatePayload, ack?: (reply: LocationAck) => void) => void;
+  "tracking:event": (
+    payload: TrackingEventPayload,
+    ack?: (reply: TrackingEventAck) => void,
+  ) => void;
 }

@@ -3,11 +3,24 @@ import { env } from "../config/env";
 import * as mapbox from "../config/mapbox";
 import * as store from "../config/redis";
 import { LocationPing } from "../models/LocationPing";
+import { TRACKING_EVENT_TYPES, TrackingEvent } from "../models/TrackingEvent";
 import { CLEAR_FLAGS, Trip, type LastLocation, type TripDocument } from "../models/Trip";
-import type { LocationResult, TripFlags, TripLocationEvent } from "../types/events";
+import type {
+  BatteryReading,
+  LocationResult,
+  TrackingEventType,
+  TripFlags,
+  TripLocationEvent,
+} from "../types/events";
 import { ApiError } from "../utils/ApiError";
 import { distanceToLine, haversineDistance, type Position } from "../utils/geo";
-import { optionalNumber, parseLatLng, requireObjectId } from "../utils/validate";
+import {
+  optionalNumber,
+  parseBattery,
+  parseLatLng,
+  parseRecordedAt,
+  requireObjectId,
+} from "../utils/validate";
 import { createAlert, type AlertInput } from "./alert.service";
 import * as realtime from "./realtime.service";
 
@@ -36,6 +49,7 @@ interface NormalizedLocation {
   speed?: number;
   heading?: number;
   accuracy?: number;
+  battery?: BatteryReading;
   recordedAt: Date;
 }
 
@@ -93,22 +107,14 @@ export async function clearTrip(tripId: string): Promise<void> {
 function normalizeLocation(raw: unknown): NormalizedLocation {
   const input = (raw ?? {}) as Record<string, unknown>;
   const [lng, lat] = parseLatLng(input, "location");
-  let recordedAt = new Date();
-  if (input.timestamp != null) {
-    recordedAt = new Date(input.timestamp as string | number);
-    if (Number.isNaN(recordedAt.getTime())) {
-      throw new ApiError(400, "timestamp must be a valid date");
-    }
-    // A device clock running ahead should not put pings in the future
-    if (recordedAt.getTime() > Date.now() + MINUTE_MS) recordedAt = new Date();
-  }
   return {
     lat,
     lng,
     speed: optionalNumber(input.speed),
     heading: optionalNumber(input.heading),
     accuracy: optionalNumber(input.accuracy),
-    recordedAt,
+    battery: parseBattery(input.battery),
+    recordedAt: parseRecordedAt(input.timestamp ?? input.recordedAt),
   };
 }
 
@@ -149,6 +155,7 @@ async function processLocation(
     speed: loc.speed,
     heading: loc.heading,
     accuracy: loc.accuracy,
+    battery: loc.battery,
     recordedAt: loc.recordedAt,
   });
 
@@ -191,7 +198,10 @@ async function processLocation(
   const flags = flagsOf(state);
   await Promise.all([
     saveState(tripId, state),
-    Trip.updateOne({ _id: trip._id, status: "in_progress" }, { $set: { lastLocation, flags } }),
+    Trip.updateOne(
+      { _id: trip._id, status: "in_progress" },
+      { $set: { lastLocation, flags, ...deviceUpdate(loc) } },
+    ),
   ]);
 
   realtime.emitToUsers([trip.manager], "trip:location", {
@@ -269,6 +279,7 @@ async function markArrived(
         arrivedAt: loc.recordedAt,
         lastLocation: buildLastLocation(loc, coordinates),
         flags: CLEAR_FLAGS,
+        ...deviceUpdate(loc),
       },
     },
     { returnDocument: "after" },
@@ -310,6 +321,16 @@ function buildLastLocation(loc: NormalizedLocation, coordinates: Position): Last
   };
 }
 
+// Fields of trip.tracking refreshed by a location ping
+function deviceUpdate(loc: NormalizedLocation): Record<string, unknown> {
+  return {
+    "tracking.lastSeenAt": new Date(),
+    ...(loc.battery
+      ? { "tracking.battery": loc.battery, "tracking.batteryAt": loc.recordedAt }
+      : {}),
+  };
+}
+
 function locationPayload(
   trip: TripDocument,
   loc: NormalizedLocation,
@@ -323,8 +344,81 @@ function locationPayload(
     speed: loc.speed ?? null,
     heading: loc.heading ?? null,
     accuracy: loc.accuracy ?? null,
+    battery: loc.battery ?? null,
     recordedAt: loc.recordedAt.toISOString(),
   };
+}
+
+// The driver app reports when it is backgrounded, goes offline or loses
+// location access. These are stored and relayed, and the latest one is used to
+// explain a signal_lost alert. They do not count as location pings.
+export async function recordTrackingEvent(
+  tripId: unknown,
+  driverId: Types.ObjectId | string,
+  raw: unknown,
+): Promise<void> {
+  const id = requireObjectId(tripId, "tripId");
+  const input = (raw ?? {}) as Record<string, unknown>;
+  const type = input.type as TrackingEventType;
+  if (!TRACKING_EVENT_TYPES.includes(type)) {
+    throw new ApiError(400, `type must be one of: ${TRACKING_EVENT_TYPES.join(", ")}`);
+  }
+  const battery = parseBattery(input.battery);
+  const recordedAt = parseRecordedAt(input.timestamp ?? input.recordedAt);
+
+  const trip = await Trip.findById(id).select("-route.geometry");
+  if (!trip) throw new ApiError(404, "Trip not found");
+  if (!trip.driver.equals(driverId)) {
+    throw new ApiError(403, "You are not the driver of this trip");
+  }
+  if (trip.status !== "in_progress") {
+    throw new ApiError(
+      409,
+      `Trip is ${trip.status}; tracking events are only accepted while it is in progress`,
+    );
+  }
+
+  await Promise.all([
+    TrackingEvent.create({ trip: trip._id, driver: trip.driver, type, battery, recordedAt }),
+    Trip.updateOne(
+      { _id: trip._id },
+      {
+        $set: {
+          "tracking.lastEvent": { type, recordedAt },
+          ...(battery ? { "tracking.battery": battery, "tracking.batteryAt": recordedAt } : {}),
+        },
+      },
+    ),
+  ]);
+
+  realtime.emitToUsers([trip.manager], "trip:tracking", {
+    tripId: trip.id,
+    type,
+    battery: battery ?? null,
+    recordedAt: recordedAt.toISOString(),
+  });
+}
+
+const INTERRUPTIONS: Partial<Record<TrackingEventType, string>> = {
+  backgrounded: "the app was sent to the background",
+  offline: "the phone went offline",
+  "location-denied": "location access was turned off",
+  "location-unavailable": "the phone could not get a location fix",
+};
+
+// What the phone last said about itself, appended to a signal_lost alert so
+// the manager can tell a dead battery from a closed app
+function describeDevice(trip: TripDocument): string {
+  const parts: string[] = [];
+  const reason = trip.tracking?.lastEvent && INTERRUPTIONS[trip.tracking.lastEvent.type];
+  if (reason) parts.push(`Last report: ${reason}.`);
+  const battery = trip.tracking?.battery;
+  parts.push(
+    battery
+      ? `Last battery reading: ${battery.level}%${battery.charging ? ", charging" : ""}.`
+      : "Battery level was not reported.",
+  );
+  return parts.join(" ");
 }
 
 // Traffic is checked at most every trafficCheckSeconds per trip
@@ -423,9 +517,13 @@ async function checkSignal(tripId: string): Promise<void> {
   await createAlert(trip, {
     type: "signal_lost",
     severity: "critical",
-    text: `has sent no location for ${Math.floor(silentMs / MINUTE_MS)} minutes`,
+    text: `has sent no location for ${Math.floor(silentMs / MINUTE_MS)} minutes. ${describeDevice(trip)}`,
     coordinates: trip.lastLocation?.location?.coordinates,
-    meta: { lastSeenAt: new Date(lastSeen).toISOString() },
+    meta: {
+      lastSeenAt: new Date(lastSeen).toISOString(),
+      battery: trip.tracking?.battery ?? null,
+      lastEvent: trip.tracking?.lastEvent?.type ?? null,
+    },
   });
 }
 

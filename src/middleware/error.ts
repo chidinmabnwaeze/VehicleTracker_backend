@@ -8,7 +8,7 @@ export const notFound: RequestHandler = (req, _res, next) => {
 
 export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   if (err instanceof ApiError) {
-    res.status(err.statusCode).json({ message: err.message, details: err.details });
+    res.status(err.statusCode).json({ message: err.message, code: err.code });
     return;
   }
   if (err instanceof MongooseError.ValidationError) {

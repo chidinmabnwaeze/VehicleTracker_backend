@@ -54,5 +54,7 @@ export const env = {
     trafficAlertCooldownMinutes: num(process.env.TRAFFIC_ALERT_COOLDOWN_MINUTES, 15),
     // Pings less accurate than this are stored but not used for detection
     maxAccuracyM: num(process.env.MAX_ACCURACY_M, 100),
+    // A driver cannot start a trip below this battery level unless charging
+    minStartBattery: num(process.env.MIN_START_BATTERY, 30),
   },
 };

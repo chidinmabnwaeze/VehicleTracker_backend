@@ -46,6 +46,8 @@ router.get("/trips/:id", trips.getTrip);
 router.get("/trips/:id/locations", trips.listLocations);
 router.post("/trips/:id/start", driver, trips.startTrip);
 router.post("/trips/:id/location", driver, trips.postLocation);
+router.post("/trips/:id/events", driver, trips.postTrackingEvent);
+router.get("/trips/:id/events", trips.listTrackingEvents);
 router.post("/trips/:id/complete", trips.completeTrip);
 router.post("/trips/:id/cancel", manager, trips.cancelTrip);
 
