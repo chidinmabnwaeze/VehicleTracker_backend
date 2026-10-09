@@ -34,6 +34,8 @@ export const env = {
   jwtSecret,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
   mapboxToken: process.env.MAPBOX_ACCESS_TOKEN,
+  // ISO country code that typed addresses are looked up in
+  geocodeCountry: process.env.GEOCODE_COUNTRY || "ng",
   firebaseServiceAccount: process.env.FIREBASE_SERVICE_ACCOUNT,
   tracking: {
     // Within this distance of the destination the trip is marked as arrived

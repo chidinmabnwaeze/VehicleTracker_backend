@@ -10,6 +10,8 @@ export interface IUser {
   role: UserRole;
   // The manager a driver belongs to
   manager?: Types.ObjectId;
+  // The one vehicle a driver uses for every trip
+  vehicle?: Types.ObjectId;
   fcmTokens: string[];
   isActive: boolean;
   createdAt: Date;
@@ -43,6 +45,7 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
     },
     role: { type: String, enum: ["manager", "driver"], required: true },
     manager: { type: Schema.Types.ObjectId, ref: "User", index: true },
+    vehicle: { type: Schema.Types.ObjectId, ref: "Vehicle" },
     fcmTokens: { type: [String], select: false },
     isActive: { type: Boolean, default: true },
   },

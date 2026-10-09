@@ -8,6 +8,7 @@ export const ALERT_TYPES: AlertType[] = [
   "traffic",
   "signal_lost",
   "arrival",
+  "driver_message",
 ];
 
 export interface IAlert {

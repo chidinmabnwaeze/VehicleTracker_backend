@@ -4,7 +4,17 @@
 
 export type UserRole = "manager" | "driver";
 export type TripStatus = "pending" | "in_progress" | "arrived" | "completed" | "cancelled";
-export type AlertType = "deviation" | "stationary" | "traffic" | "signal_lost" | "arrival";
+export type AlertType =
+  | "deviation"
+  | "stationary"
+  | "traffic"
+  | "signal_lost"
+  | "arrival"
+  // A message the driver sent to their manager from the trip screen
+  | "driver_message";
+export type DeliveryType = "Parcel" | "Cargo";
+// Whether pickup and drop-off are in the same state
+export type DeliveryRange = "Intra-State" | "Inter-State";
 export type AlertSeverity = "info" | "warning" | "critical";
 
 // The driver's phone battery. Browsers without the Battery API (iOS, Firefox)

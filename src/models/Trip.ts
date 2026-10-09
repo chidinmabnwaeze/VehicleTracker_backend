@@ -1,5 +1,12 @@
 import { Schema, model, type HydratedDocument, type Types } from "mongoose";
-import type { BatteryReading, TrackingEventType, TripFlags, TripStatus } from "../types/events";
+import type {
+  BatteryReading,
+  DeliveryRange,
+  DeliveryType,
+  TrackingEventType,
+  TripFlags,
+  TripStatus,
+} from "../types/events";
 import type { Position } from "../utils/geo";
 import { pointSchema, type GeoPoint } from "./point.schema";
 import { TRACKING_EVENT_TYPES, batterySchema } from "./TrackingEvent";
@@ -22,7 +29,19 @@ export const CLEAR_FLAGS: TripFlags = {
 export interface Place {
   name?: string;
   address?: string;
+  // State or region, filled in by geocoding. Used to tell intra from inter-state.
+  region?: string;
   location: GeoPoint;
+}
+
+export const DELIVERY_TYPES: DeliveryType[] = ["Parcel", "Cargo"];
+
+// What is being delivered, as entered on the order form
+export interface TripPackage {
+  name?: string;
+  deliveryType?: DeliveryType;
+  category?: string;
+  description?: string;
 }
 
 // Planned route the driver is expected to follow
@@ -52,11 +71,16 @@ export interface DeviceTracking {
 
 export interface ITrip {
   manager: Types.ObjectId;
-  driver: Types.ObjectId;
-  vehicle: Types.ObjectId;
+  // An order is created first and a driver assigned after, so a pending trip
+  // can be without one. The vehicle is the assigned driver's vehicle.
+  driver?: Types.ObjectId;
+  vehicle?: Types.ObjectId;
+  // The tracking number shown to users, e.g. LKH-482-913. Generated when not given.
   reference?: string;
   cargo?: string;
   notes?: string;
+  package?: TripPackage;
+  range?: DeliveryRange;
   origin: Place;
   destination: Place;
   status: TripStatus;
@@ -66,6 +90,8 @@ export interface ITrip {
   eta?: Date;
   flags: TripFlags;
   startedAt?: Date;
+  // When the driver marked the package as picked up
+  pickedUpAt?: Date;
   arrivedAt?: Date;
   completedAt?: Date;
   cancelledAt?: Date;
@@ -79,6 +105,7 @@ const placeSchema = new Schema<Place>(
   {
     name: { type: String, trim: true },
     address: { type: String, trim: true },
+    region: { type: String, trim: true },
     location: { type: pointSchema, required: true },
   },
   { _id: false },
@@ -87,11 +114,18 @@ const placeSchema = new Schema<Place>(
 const tripSchema = new Schema<ITrip>(
   {
     manager: { type: Schema.Types.ObjectId, ref: "User", required: true },
-    driver: { type: Schema.Types.ObjectId, ref: "User", required: true },
-    vehicle: { type: Schema.Types.ObjectId, ref: "Vehicle", required: true },
-    reference: { type: String, trim: true },
+    driver: { type: Schema.Types.ObjectId, ref: "User" },
+    vehicle: { type: Schema.Types.ObjectId, ref: "Vehicle" },
+    reference: { type: String, trim: true, uppercase: true },
     cargo: { type: String, trim: true },
     notes: { type: String, trim: true },
+    package: {
+      name: { type: String, trim: true },
+      deliveryType: { type: String, enum: DELIVERY_TYPES },
+      category: { type: String, trim: true },
+      description: { type: String, trim: true },
+    },
+    range: { type: String, enum: ["Intra-State", "Inter-State"] },
     origin: { type: placeSchema, required: true },
     destination: { type: placeSchema, required: true },
     status: { type: String, enum: TRIP_STATUSES, default: "pending" },
@@ -128,6 +162,7 @@ const tripSchema = new Schema<ITrip>(
       signalLost: { type: Boolean, default: false },
     },
     startedAt: Date,
+    pickedUpAt: Date,
     arrivedAt: Date,
     completedAt: Date,
     cancelledAt: Date,
@@ -137,5 +172,6 @@ const tripSchema = new Schema<ITrip>(
 
 tripSchema.index({ manager: 1, status: 1, createdAt: -1 });
 tripSchema.index({ driver: 1, status: 1 });
+tripSchema.index({ manager: 1, reference: 1 });
 
 export const Trip = model<ITrip>("Trip", tripSchema);

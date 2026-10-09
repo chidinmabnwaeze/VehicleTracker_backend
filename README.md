@@ -102,10 +102,10 @@ These are the server side of the checks the driver app already makes. The server
 
 | Method | Path | Body |
 | --- | --- | --- |
-| POST | `/drivers` | `name, email, password, phone?` |
-| GET | `/drivers` | query: `active=true\|false` |
+| POST | `/drivers` | `name, email, password, phone?, vehicleId?` |
+| GET | `/drivers` | query: `active=true\|false`, `available=true` (active, has a vehicle, not out on a trip). Drivers are returned with their `vehicle`. |
 | GET | `/drivers/:id` | |
-| PATCH | `/drivers/:id` | `name?, phone?, password?, isActive?` |
+| PATCH | `/drivers/:id` | `name?, phone?, password?, isActive?, vehicleId?` (`null` takes the vehicle away). A driver has one vehicle and a vehicle belongs to one driver. |
 | DELETE | `/drivers/:id` | Deactivates the driver. |
 | POST | `/vehicles` | `plateNumber, make?, vehicleModel?, type?` |
 | GET | `/vehicles` | query: `active=true\|false` |
@@ -119,7 +119,10 @@ These are the server side of the checks the driver app already makes. The server
 | --- | --- | --- | --- |
 | POST | `/trips` | manager | Body below. |
 | GET | `/trips` | both | Managers see their trips, drivers the ones assigned to them. Query: `status` (comma separated), `driverId`, `vehicleId`. The route geometry is left out of lists. |
-| GET | `/trips/:id` | both | Includes `route.geometry` to draw the planned route. |
+| GET | `/trips/:id` | both | Includes `route.geometry` to draw the planned route. On every `/trips/:id` route except `location` and `events`, `:id` can also be the trip's `reference` (its tracking number, e.g. `LKH-482-913`). |
+| POST | `/trips/:id/assign` | manager | Gives a `pending` trip to a driver, with that driver's vehicle. Body: `driverId`. Code `driver-has-no-vehicle` when they have none. |
+| POST | `/trips/:id/pickup` | driver | Records `pickedUpAt`. |
+| POST | `/trips/:id/messages` | driver | A note to the manager, raised as a `driver_message` alert. Body: `category, description`. |
 | GET | `/trips/:id/locations` | both | The path actually driven, oldest first. Query: `since`, `limit` (max 5000). |
 | POST | `/trips/:id/start` | driver | `pending` to `in_progress`. Optional body: `{ "battery": { "level": 82, "charging": false } }`. |
 | POST | `/trips/:id/location` | driver | HTTP fallback for the socket event, same body. |
@@ -139,6 +142,10 @@ POST /api/trips
   "destination": { "name": "Victoria Island Store", "lat": 6.4281, "lng": 3.4219 }
 }
 ```
+
+`driverId` and `vehicleId` are optional: an order can be created first and assigned with `/trips/:id/assign`. `vehicleId` defaults to the driver's own vehicle, and `reference` is generated when not given. `origin` and `destination` can also be just `{ "address": "..." }`, which is looked up with Mapbox in `GEOCODE_COUNTRY` (default `ng`); the code is `address-not-found` when nothing matches. Mapbox knows streets and districts in Nigeria but few landmarks, so prefer sending coordinates. `package` takes `{ name?, deliveryType?: "Parcel" | "Cargo", category?, description? }`, and `range` (`Intra-State` or `Inter-State`) is set when both places resolve to a state.
+
+`GET /stats` (manager) returns `{ totalRiders, routeDeviations, activeDeliveries, totalDeliveries }` for the overview cards.
 
 Trip status goes `pending` → `in_progress` → `arrived` → `completed`, or `cancelled`. For the live map, load `GET /trips?status=in_progress,arrived` once, then keep it current from the socket.
 

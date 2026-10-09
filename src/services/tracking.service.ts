@@ -137,7 +137,7 @@ async function processLocation(
 ): Promise<LocationResult> {
   const trip = await Trip.findById(tripId).select("-route.geometry");
   if (!trip) throw new ApiError(404, "Trip not found");
-  if (!trip.driver.equals(driverId)) {
+  if (!trip.driver?.equals(driverId)) {
     throw new ApiError(403, "You are not the driver of this trip");
   }
   if (trip.status !== "in_progress") {
@@ -368,7 +368,7 @@ export async function recordTrackingEvent(
 
   const trip = await Trip.findById(id).select("-route.geometry");
   if (!trip) throw new ApiError(404, "Trip not found");
-  if (!trip.driver.equals(driverId)) {
+  if (!trip.driver?.equals(driverId)) {
     throw new ApiError(403, "You are not the driver of this trip");
   }
   if (trip.status !== "in_progress") {

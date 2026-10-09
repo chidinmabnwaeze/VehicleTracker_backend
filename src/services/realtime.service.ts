@@ -25,12 +25,13 @@ export function setIO(server: TrackerServer): void {
 }
 
 export function emitToUsers<E extends keyof ServerToClientEvents>(
-  userIds: Array<Types.ObjectId | string>,
+  // undefined entries are skipped: a trip may not have a driver yet
+  userIds: Array<Types.ObjectId | string | undefined>,
   event: E,
   ...args: Parameters<ServerToClientEvents[E]>
 ): void {
   if (!io) return;
-  const rooms = [...new Set(userIds.map((id) => userRoom(String(id))))];
+  const rooms = [...new Set(userIds.filter(Boolean).map((id) => userRoom(String(id))))];
   if (!rooms.length) return;
   // The event name and payload are checked by this function's own signature
   const target = io.to(rooms) as unknown as { emit(event: string, ...args: unknown[]): boolean };

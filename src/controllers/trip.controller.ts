@@ -5,20 +5,29 @@ import { LocationPing } from "../models/LocationPing";
 import { TrackingEvent } from "../models/TrackingEvent";
 import {
   CLEAR_FLAGS,
+  DELIVERY_TYPES,
   TRIP_STATUSES,
   Trip,
   type Place,
   type TripDocument,
+  type TripPackage,
   type TripRoute,
 } from "../models/Trip";
 import { User, type UserDocument } from "../models/User";
-import { Vehicle } from "../models/Vehicle";
+import { Vehicle, type VehicleDocument } from "../models/Vehicle";
+import { createAlert } from "../services/alert.service";
 import * as realtime from "../services/realtime.service";
 import * as tracking from "../services/tracking.service";
-import type { TripStatus } from "../types/events";
+import type { DeliveryRange, DeliveryType, TripStatus } from "../types/events";
 import { ApiError } from "../utils/ApiError";
 import { haversineDistance, type Position } from "../utils/geo";
-import { pagination, parseBattery, parseLatLng, requireObjectId } from "../utils/validate";
+import {
+  pagination,
+  parseBattery,
+  parseLatLng,
+  requireObjectId,
+  requireString,
+} from "../utils/validate";
 
 const POPULATE = [
   { path: "driver", select: "name email phone" },
@@ -29,9 +38,15 @@ const POPULATE = [
 const scope = (user: UserDocument): Record<string, unknown> =>
   user.role === "manager" ? { manager: user._id } : { driver: user._id };
 
+// A trip is addressed by its id or by its tracking number (reference)
+function tripKey(param: unknown): Record<string, unknown> {
+  const key = String(param ?? "").trim();
+  if (!key) throw new ApiError(400, "trip id is required");
+  return /^[0-9a-f]{24}$/i.test(key) ? { _id: key } : { reference: key.toUpperCase() };
+}
+
 async function findTrip(req: Request, { withRoute = false } = {}): Promise<TripDocument> {
-  const id = requireObjectId(req.params.id, "trip id");
-  const query = Trip.findOne({ _id: id, ...scope(req.user) });
+  const query = Trip.findOne({ ...tripKey(req.params.id), ...scope(req.user) });
   if (!withRoute) query.select("-route.geometry");
   const trip = await query;
   if (!trip) throw new ApiError(404, "Trip not found");
@@ -40,16 +55,115 @@ async function findTrip(req: Request, { withRoute = false } = {}): Promise<TripD
 
 const fullTrip = (id: TripDocument["_id"]) => Trip.findById(id).populate(POPULATE);
 
-function parsePlace(input: unknown, label: string): Place {
-  if (!input || typeof input !== "object") {
-    throw new ApiError(400, `${label} is required, with lat and lng`);
+const text = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() ? value.trim() : undefined;
+
+// Accepts { lat, lng }, or just an address (a string or { address }) that is
+// looked up with Mapbox. The name keeps what the user typed.
+async function resolvePlace(input: unknown, label: string): Promise<Place> {
+  const source = (typeof input === "string" ? { address: input } : input) as Record<
+    string,
+    unknown
+  > | null;
+  if (!source || typeof source !== "object") throw new ApiError(400, `${label} is required`);
+
+  const name = text(source.name);
+  const address = text(source.address);
+  const hasCoordinates = (source.lat ?? source.latitude) != null;
+
+  if (!hasCoordinates) {
+    if (!address) throw new ApiError(400, `${label} needs an address, or a lat and lng`);
+    if (!mapbox.isConfigured()) {
+      throw new ApiError(
+        400,
+        `${label} needs a lat and lng: address lookup is off because MAPBOX_ACCESS_TOKEN is not set`,
+      );
+    }
+    const found = await mapbox.geocode(address);
+    if (!found) {
+      throw new ApiError(
+        422,
+        `Could not find "${address}". Try a more specific ${label} address`,
+        "address-not-found",
+      );
+    }
+    return {
+      name: name || address,
+      address: found.address,
+      region: found.region,
+      location: { type: "Point", coordinates: found.coordinates },
+    };
   }
-  const place = input as { name?: string; address?: string };
+
+  const coordinates = parseLatLng(source, label);
+  // Bare coordinates (e.g. "use my location") are named by a reverse lookup.
+  // That is a nicety, so a failed lookup does not fail the request.
+  const region = text(source.region);
+  const found =
+    mapbox.isConfigured() && (!address || !region)
+      ? await mapbox.reverseGeocode(coordinates).catch(() => null)
+      : null;
   return {
-    name: place.name,
-    address: place.address,
-    location: { type: "Point", coordinates: parseLatLng(input, label) },
+    name: name || found?.name || undefined,
+    address: address || found?.address || undefined,
+    region: region || found?.region,
+    location: { type: "Point", coordinates },
   };
+}
+
+function parsePackage(input: unknown): TripPackage | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const source = input as Record<string, unknown>;
+  const deliveryType = text(source.deliveryType);
+  if (deliveryType && !DELIVERY_TYPES.includes(deliveryType as DeliveryType)) {
+    throw new ApiError(400, `deliveryType must be one of: ${DELIVERY_TYPES.join(", ")}`);
+  }
+  return {
+    name: text(source.name),
+    deliveryType: deliveryType as DeliveryType | undefined,
+    category: text(source.category),
+    description: text(source.description),
+  };
+}
+
+// Unknown when either place could not be tied to a state
+function rangeOf(origin: Place, destination: Place): DeliveryRange | undefined {
+  if (!origin.region || !destination.region) return undefined;
+  return origin.region === destination.region ? "Intra-State" : "Inter-State";
+}
+
+// A tracking number such as LKH-482-913, unique among the manager's trips
+async function newReference(managerId: UserDocument["_id"]): Promise<string> {
+  const part = (): string => String(Math.floor(100 + Math.random() * 900));
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const reference = `LKH-${part()}-${part()}`;
+    if (!(await Trip.exists({ manager: managerId, reference }))) return reference;
+  }
+  throw new ApiError(500, "Could not generate a tracking number, please try again");
+}
+
+// The driver for a trip and the vehicle they will use: the one given, or
+// otherwise the vehicle assigned to that driver
+async function resolveAssignment(
+  managerId: UserDocument["_id"],
+  body: Record<string, unknown>,
+): Promise<{ driver: UserDocument; vehicle: VehicleDocument }> {
+  const driverId = requireObjectId(body.driverId, "driverId");
+  const driver = await User.findOne({
+    _id: driverId,
+    role: "driver",
+    manager: managerId,
+    isActive: true,
+  });
+  if (!driver) throw new ApiError(404, "Driver not found or inactive");
+
+  const vehicleId = body.vehicleId ? requireObjectId(body.vehicleId, "vehicleId") : driver.vehicle;
+  if (!vehicleId) {
+    throw new ApiError(409, "This driver has no vehicle assigned", "driver-has-no-vehicle");
+  }
+  const vehicle = await Vehicle.findOne({ _id: vehicleId, manager: managerId, isActive: true });
+  if (!vehicle) throw new ApiError(404, "Vehicle not found or inactive");
+  return { driver, vehicle };
 }
 
 export async function planRoute(from: Position, to: Position): Promise<TripRoute> {
@@ -83,27 +197,33 @@ function emitStatus(trip: TripDocument): void {
 
 export async function createTrip(req: Request, res: Response): Promise<void> {
   const body = req.body || {};
-  const driverId = requireObjectId(body.driverId, "driverId");
-  const vehicleId = requireObjectId(body.vehicleId, "vehicleId");
-  const origin = parsePlace(body.origin, "origin");
-  const destination = parsePlace(body.destination, "destination");
-
-  const [driver, vehicle] = await Promise.all([
-    User.findOne({ _id: driverId, role: "driver", manager: req.user._id, isActive: true }),
-    Vehicle.findOne({ _id: vehicleId, manager: req.user._id, isActive: true }),
+  // The driver is optional: an order can be created first and assigned after
+  const assignment = body.driverId ? await resolveAssignment(req.user._id, body) : null;
+  const [origin, destination] = await Promise.all([
+    resolvePlace(body.origin, "origin"),
+    resolvePlace(body.destination, "destination"),
   ]);
-  if (!driver) throw new ApiError(404, "Driver not found or inactive");
-  if (!vehicle) throw new ApiError(404, "Vehicle not found or inactive");
+  // Closer than the arrival radius and the trip would count as arrived the moment it starts
+  const apart = haversineDistance(origin.location.coordinates, destination.location.coordinates);
+  if (apart <= env.tracking.arrivalRadiusM) {
+    throw new ApiError(
+      400,
+      "Pickup and delivery locations are the same place. Choose two different locations",
+      "same-location",
+    );
+  }
 
   const route = await planRoute(origin.location.coordinates, destination.location.coordinates);
 
   const trip = await Trip.create({
     manager: req.user._id,
-    driver: driver._id,
-    vehicle: vehicle._id,
-    reference: body.reference,
+    driver: assignment?.driver._id,
+    vehicle: assignment?.vehicle._id,
+    reference: text(body.reference) || (await newReference(req.user._id)),
     cargo: body.cargo,
     notes: body.notes,
+    package: parsePackage(body.package),
+    range: rangeOf(origin, destination),
     origin,
     destination,
     route,
@@ -145,6 +265,21 @@ export async function getTrip(req: Request, res: Response): Promise<void> {
   res.json({ data: await trip.populate(POPULATE) });
 }
 
+// Gives a pending trip to a driver, along with that driver's vehicle
+export async function assignTrip(req: Request, res: Response): Promise<void> {
+  const trip = await findTrip(req);
+  if (trip.status !== "pending") {
+    throw new ApiError(409, `Trip is ${trip.status} and can no longer be assigned`);
+  }
+  const { driver, vehicle } = await resolveAssignment(req.user._id, req.body || {});
+  trip.driver = driver._id;
+  trip.vehicle = vehicle._id;
+  await trip.save();
+
+  emitStatus(trip);
+  res.json({ data: await fullTrip(trip._id) });
+}
+
 export async function startTrip(req: Request, res: Response): Promise<void> {
   const trip = await findTrip(req);
   if (trip.status !== "pending") {
@@ -182,6 +317,41 @@ export async function startTrip(req: Request, res: Response): Promise<void> {
 
   emitStatus(trip);
   res.json({ data: await fullTrip(trip._id) });
+}
+
+// The driver has collected the package
+export async function pickupTrip(req: Request, res: Response): Promise<void> {
+  const trip = await findTrip(req);
+  if (trip.status !== "in_progress" && trip.status !== "arrived") {
+    throw new ApiError(409, `Trip is ${trip.status}; pickup can only be marked during the trip`);
+  }
+  if (!trip.pickedUpAt) {
+    trip.pickedUpAt = new Date();
+    await trip.save();
+    emitStatus(trip);
+  }
+  res.json({ data: await fullTrip(trip._id) });
+}
+
+// A note from the driver to their manager (traffic, a breakdown, ...), raised as an alert
+export async function postMessage(req: Request, res: Response): Promise<void> {
+  const trip = await findTrip(req);
+  if (trip.status !== "in_progress" && trip.status !== "arrived") {
+    throw new ApiError(409, `Trip is ${trip.status}; messages can only be sent during the trip`);
+  }
+  const category = requireString(req.body?.category, "category").slice(0, 60);
+  const description = requireString(req.body?.description, "description").slice(0, 500);
+
+  await createAlert(trip, {
+    type: "driver_message",
+    severity: "info",
+    title: `New Message: ${category}`,
+    text: description,
+    verbatim: true,
+    coordinates: trip.lastLocation?.location?.coordinates,
+    meta: { category },
+  });
+  res.status(204).end();
 }
 
 export async function completeTrip(req: Request, res: Response): Promise<void> {

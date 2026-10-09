@@ -78,8 +78,7 @@ interface TripSpec {
   notes?: string;
   from: PlaceKey;
   to: PlaceKey;
-  driver: number; // index into DRIVERS
-  vehicle: number; // index into VEHICLES
+  driver: number; // index into DRIVERS, who drives the vehicle at the same index
   status: TripStatus;
   // How long ago the trip was created
   createdMinutesAgo: number;
@@ -95,20 +94,20 @@ const DAY = 24 * HOUR;
 
 const TRIPS: TripSpec[] = [
   // Waiting for the driver to start. Log in as Emeka or Yusuf to start one.
-  { reference: "LKH-482-913", cargo: "40 cartons of Indomie noodles", from: "ikeja", to: "lekki", driver: 0, vehicle: 0, status: "pending", createdMinutesAgo: 35 },
-  { reference: "LKH-517-204", cargo: "Office furniture, 12 pieces", notes: "Call the receiver on arrival", from: "apapa", to: "ikorodu", driver: 5, vehicle: 6, status: "pending", createdMinutesAgo: 90 },
+  { reference: "LKH-482-913", cargo: "40 cartons of Indomie noodles", from: "ikeja", to: "lekki", driver: 0, status: "pending", createdMinutesAgo: 35 },
+  { reference: "LKH-517-204", cargo: "Office furniture, 12 pieces", notes: "Call the receiver on arrival", from: "apapa", to: "ikorodu", driver: 5, status: "pending", createdMinutesAgo: 90 },
   // On the road right now
-  { reference: "LKH-603-771", cargo: "Pharmaceutical supplies, 18 boxes", notes: "Keep out of direct sunlight", from: "oshodi", to: "vi", driver: 1, vehicle: 1, status: "in_progress", scenario: "on_route", createdMinutesAgo: 70 },
-  { reference: "LKH-648-320", cargo: "6 LG televisions", from: "yaba", to: "ajah", driver: 2, vehicle: 2, status: "in_progress", scenario: "deviated", createdMinutesAgo: 95 },
-  { reference: "LKH-655-098", cargo: "Frozen fish, 20 crates", from: "apapa", to: "maryland", driver: 3, vehicle: 4, status: "in_progress", scenario: "stationary", createdMinutesAgo: 110 },
+  { reference: "LKH-603-771", cargo: "Pharmaceutical supplies, 18 boxes", notes: "Keep out of direct sunlight", from: "oshodi", to: "vi", driver: 1, status: "in_progress", scenario: "on_route", createdMinutesAgo: 70 },
+  { reference: "LKH-648-320", cargo: "6 LG televisions", from: "yaba", to: "ajah", driver: 2, status: "in_progress", scenario: "deviated", createdMinutesAgo: 95 },
+  { reference: "LKH-655-098", cargo: "Frozen fish, 20 crates", from: "apapa", to: "maryland", driver: 3, status: "in_progress", scenario: "stationary", createdMinutesAgo: 110 },
   // At the destination, waiting to be marked delivered
-  { reference: "LKH-590-446", cargo: "Ankara textiles, 15 bales", from: "yaba", to: "surulere", driver: 4, vehicle: 3, status: "arrived", createdMinutesAgo: 80 },
+  { reference: "LKH-590-446", cargo: "Ankara textiles, 15 bales", from: "yaba", to: "surulere", driver: 4, status: "arrived", createdMinutesAgo: 80 },
   // History
-  { reference: "LKH-401-287", cargo: "Soft drinks, 60 crates", from: "ikeja", to: "festac", driver: 0, vehicle: 0, status: "completed", createdMinutesAgo: (DAY + 3 * HOUR) / MIN, history: ["traffic"] },
-  { reference: "LKH-388-152", cargo: "Dangote cement, 30 bags", from: "apapa", to: "ikoyi", driver: 4, vehicle: 1, status: "completed", createdMinutesAgo: (2 * DAY + 5 * HOUR) / MIN, history: ["deviation", "stationary"] },
-  { reference: "LKH-352-609", cargo: "Phone accessories, 8 cartons", from: "maryland", to: "lekki", driver: 2, vehicle: 5, status: "completed", createdMinutesAgo: (4 * DAY + 2 * HOUR) / MIN },
-  { reference: "LKH-340-875", cargo: "Bottled water, 100 packs", from: "oshodi", to: "ikorodu", driver: 5, vehicle: 6, status: "completed", createdMinutesAgo: (6 * DAY + 6 * HOUR) / MIN, history: ["signal_lost"] },
-  { reference: "LKH-333-021", cargo: "Generator parts", notes: "Cancelled: customer rescheduled", from: "surulere", to: "ajah", driver: 5, vehicle: 2, status: "cancelled", createdMinutesAgo: (3 * DAY) / MIN },
+  { reference: "LKH-401-287", cargo: "Soft drinks, 60 crates", from: "ikeja", to: "festac", driver: 0, status: "completed", createdMinutesAgo: (DAY + 3 * HOUR) / MIN, history: ["traffic"] },
+  { reference: "LKH-388-152", cargo: "Dangote cement, 30 bags", from: "apapa", to: "ikoyi", driver: 4, status: "completed", createdMinutesAgo: (2 * DAY + 5 * HOUR) / MIN, history: ["deviation", "stationary"] },
+  { reference: "LKH-352-609", cargo: "Phone accessories, 8 cartons", from: "maryland", to: "lekki", driver: 2, status: "completed", createdMinutesAgo: (4 * DAY + 2 * HOUR) / MIN },
+  { reference: "LKH-340-875", cargo: "Bottled water, 100 packs", from: "oshodi", to: "ikorodu", driver: 5, status: "completed", createdMinutesAgo: (6 * DAY + 6 * HOUR) / MIN, history: ["signal_lost"] },
+  { reference: "LKH-333-021", cargo: "Generator parts", notes: "Cancelled: customer rescheduled", from: "surulere", to: "ajah", driver: 5, status: "cancelled", createdMinutesAgo: (3 * DAY) / MIN },
 ];
 
 const ALERT_TITLES: Record<AlertType, string> = {
@@ -117,6 +116,7 @@ const ALERT_TITLES: Record<AlertType, string> = {
   traffic: "Heavy traffic",
   signal_lost: "Signal lost",
   arrival: "Arrived at destination",
+  driver_message: "New Message: Traffic",
 };
 
 const ALERT_SEVERITY: Record<AlertType, AlertSeverity> = {
@@ -125,6 +125,7 @@ const ALERT_SEVERITY: Record<AlertType, AlertSeverity> = {
   traffic: "warning",
   signal_lost: "critical",
   arrival: "info",
+  driver_message: "info",
 };
 
 const ALERT_TEXT: Record<AlertType, (destination: string) => string> = {
@@ -134,11 +135,14 @@ const ALERT_TEXT: Record<AlertType, (destination: string) => string> = {
   signal_lost: () =>
     "has sent no location for 3 minutes. Last report: the app was sent to the background. Last battery reading: 11%.",
   arrival: (destination) => `has arrived at ${destination}`,
+  driver_message: () => "sent: There is a lot of traffic along the road, there was an accident",
 };
 
 const toPlace = (place: SeedPlace) => ({
   name: place.name,
   address: place.address,
+  // Every seed place is in Lagos
+  region: "Lagos",
   location: { type: "Point" as const, coordinates: [place.lng, place.lat] },
 });
 
@@ -180,7 +184,8 @@ async function seedTrip(spec: TripSpec, ctx: SeedContext): Promise<void> {
   const from = PLACES[spec.from];
   const to = PLACES[spec.to];
   const driver = ctx.drivers[spec.driver];
-  const vehicle = ctx.vehicles[spec.vehicle];
+  // A driver always uses their own vehicle (assigned by index in seedDatabase)
+  const vehicle = ctx.vehicles[spec.driver];
   const route = await routeFor(from, to);
   const coordinates = route.geometry?.coordinates ?? [];
   const durationMs = (route.durationSeconds ?? 40 * 60) * 1000;
@@ -226,6 +231,13 @@ async function seedTrip(spec: TripSpec, ctx: SeedContext): Promise<void> {
     reference: spec.reference,
     cargo: spec.cargo,
     notes: spec.notes,
+    package: {
+      name: spec.cargo,
+      deliveryType: vehicle.type === "Motorcycle" ? "Parcel" : "Cargo",
+      category: "General goods",
+      description: spec.notes,
+    },
+    range: "Intra-State",
     origin: toPlace(from),
     destination: toPlace(to),
     status: spec.status,
@@ -357,6 +369,11 @@ export async function seedDatabase({ reset = false } = {}): Promise<SeedResult> 
   const vehicles: VehicleDocument[] = [];
   for (const vehicle of VEHICLES) {
     vehicles.push(await Vehicle.create({ ...vehicle, manager: manager._id }));
+  }
+  // One vehicle per driver, matched by position in the two lists
+  for (const [index, driver] of drivers.entries()) {
+    driver.vehicle = vehicles[index]._id;
+    await driver.save();
   }
 
   const ctx: SeedContext = { manager, drivers, vehicles, now: Date.now() };
