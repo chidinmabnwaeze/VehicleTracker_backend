@@ -15,6 +15,26 @@ npm test
 npm run typecheck
 ```
 
+### Demo data
+
+```bash
+npm run seed                  # needs MONGO_URI; does nothing if the demo data is already there
+npm run seed -- --reset       # replace the demo data
+npm run simulate -- --seeded  # with the server running: drives a seeded trip live, one ping a second
+```
+
+The seed creates one manager, 7 drivers, 8 vehicles and 11 Lagos trips covering every status, with planned routes, driven paths, battery readings and alerts. It only ever touches the seed manager's data. Every account uses the password `password123`:
+
+| Role | Email |
+| --- | --- |
+| Manager | `manager@example.com` |
+| Driver with a pending trip to start | `emeka@example.com`, `yusuf@example.com` |
+| Driver on the road | `tunde@example.com`, `ibrahim@example.com` (off route), `chinedu@example.com` (stationary) |
+| Driver at the destination | `segun@example.com` |
+| Driver with no trips | `blessing@example.com` |
+
+The three seeded trips that are "on the road" are snapshots: nothing is sending their location, so each raises a real `signal_lost` alert about a minute after the server starts.
+
 For production, `npm run build` compiles `src/` to `dist/` and `npm start` runs it.
 
 The server starts with an empty `.env`. Each missing service has a development fallback:

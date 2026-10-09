@@ -502,7 +502,11 @@ async function checkSignal(tripId: string): Promise<void> {
   if (!trip || trip.status !== "in_progress") return;
 
   const state = await loadState(tripId);
-  const lastSeen = state.lastPingAt ?? trip.startedAt?.getTime() ?? Date.now();
+  const lastSeen =
+    state.lastPingAt ??
+    trip.tracking?.lastSeenAt?.getTime() ??
+    trip.startedAt?.getTime() ??
+    Date.now();
   const silentMs = Date.now() - lastSeen;
   if (state.signalLost || silentMs < cfg.signalLostMinutes * MINUTE_MS) return;
 

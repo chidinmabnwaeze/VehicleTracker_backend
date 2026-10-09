@@ -1,5 +1,8 @@
 // Drives a fake delivery against a running server so the whole pipeline can be
 // seen working without a frontend:  npm run simulate
+// With --seeded it instead drives a trip of the seeded demo driver, one ping a
+// second, so it can be watched in the frontend logged in as the seeded manager:
+//   npm run simulate -- --seeded
 // The trip goes off route, stops for a while, then arrives. Pings carry
 // back-dated timestamps 20 s apart, so minutes of driving take a few seconds.
 import { io, type Socket } from "socket.io-client";
@@ -15,6 +18,9 @@ interface Session {
 interface Entity {
   id: string;
 }
+interface VehicleResponse extends Entity {
+  plateNumber: string;
+}
 interface TripResponse extends Entity {
   route: { source: string; geometry: { coordinates: Position[] } };
 }
@@ -24,7 +30,15 @@ const ORIGIN = { name: "Ikeja Warehouse", lat: 6.6018, lng: 3.3515 };
 const DESTINATION = { name: "Victoria Island Store", lat: 6.4281, lng: 3.4219 };
 const STEPS = 60;
 const PING_GAP_SECONDS = 20;
-const SEND_EVERY_MS = 100;
+// Same accounts as src/seed/seed.ts
+const SEEDED = process.argv.includes("--seeded");
+const SEED_ACCOUNTS = {
+  manager: "manager@example.com",
+  driver: "emeka@example.com",
+  password: "password123",
+  plateNumber: "LND-482-XA",
+};
+const SEND_EVERY_MS = SEEDED ? 1000 : 100;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -78,10 +92,14 @@ function buildPings(path: Position[]): Array<{ lat: number; lng: number }> {
   return pings;
 }
 
-async function main(): Promise<void> {
-  const stamp = Date.now();
-  const password = "password123";
+interface Setup {
+  manager: Session;
+  driverLogin: Session;
+  created: TripResponse;
+}
 
+// A new manager, driver, vehicle and trip, so runs never collide
+async function freshTrip(stamp: number, password: string): Promise<Setup> {
   const manager = await api<Session>("POST", "/auth/register", undefined, {
     name: "Sim Manager",
     email: `manager.${stamp}@example.com`,
@@ -104,7 +122,46 @@ async function main(): Promise<void> {
     origin: ORIGIN,
     destination: DESTINATION,
   });
-  console.log(`Trip ${created.id} created, route source: ${created.route.source}`);
+  const driverLogin = await api<Session>("POST", "/auth/login", undefined, {
+    email: `driver.${stamp}@example.com`,
+    password,
+  });
+  return { manager, driverLogin, created };
+}
+
+// The seeded driver's pending trip, or a new one for them once that is used up
+async function seededTrip(): Promise<Setup> {
+  const { password } = SEED_ACCOUNTS;
+  const login = (email: string): Promise<Session> =>
+    api<Session>("POST", "/auth/login", undefined, { email, password });
+  const manager = await login(SEED_ACCOUNTS.manager);
+  const driverLogin = await login(SEED_ACCOUNTS.driver);
+
+  const pending = await api<TripResponse[]>("GET", "/trips?status=pending", driverLogin.token);
+  if (pending.length) return { manager, driverLogin, created: pending[0] };
+
+  const vehicles = await api<VehicleResponse[]>("GET", "/vehicles?active=true", manager.token);
+  const vehicle =
+    vehicles.find((v) => v.plateNumber === SEED_ACCOUNTS.plateNumber) ?? vehicles[0];
+  const created = await api<TripResponse>("POST", "/trips", manager.token, {
+    driverId: driverLogin.user.id,
+    vehicleId: vehicle.id,
+    reference: `LKH-${String(Date.now()).slice(-6, -3)}-${String(Date.now()).slice(-3)}`,
+    cargo: "40 cartons of Indomie noodles",
+    origin: ORIGIN,
+    destination: DESTINATION,
+  });
+  return { manager, driverLogin, created };
+}
+
+async function main(): Promise<void> {
+  const stamp = Date.now();
+  const password = "password123";
+
+  const { manager, driverLogin, created } = SEEDED
+    ? await seededTrip()
+    : await freshTrip(stamp, password);
+  console.log(`Trip ${created.id} ready, route source: ${created.route.source}`);
 
   const seen: AlertType[] = [];
   let locations = 0;
@@ -120,14 +177,12 @@ async function main(): Promise<void> {
     console.log(`[manager] trip:tracking -> ${event.type}, battery ${event.battery?.level}%`),
   );
   managerSocket.on("alert:new", (alert) => {
+    // The seeded manager also gets alerts for their other trips
+    if (alert.trip !== created.id) return;
     seen.push(alert.type);
     console.log(`[manager] alert:new  -> ${alert.type} (${alert.severity}): ${alert.message}`);
   });
 
-  const driverLogin = await api<Session>("POST", "/auth/login", undefined, {
-    email: `driver.${stamp}@example.com`,
-    password,
-  });
   const trip = await api<TripResponse>("POST", `/trips/${created.id}/start`, driverLogin.token, {
     battery: { level: 82, charging: false },
   });

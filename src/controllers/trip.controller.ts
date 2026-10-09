@@ -52,7 +52,7 @@ function parsePlace(input: unknown, label: string): Place {
   };
 }
 
-async function planRoute(from: Position, to: Position): Promise<TripRoute> {
+export async function planRoute(from: Position, to: Position): Promise<TripRoute> {
   if (!mapbox.isConfigured()) {
     return {
       source: "straight_line",
