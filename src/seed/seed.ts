@@ -26,13 +26,13 @@ export const SEED_MANAGER = {
 };
 
 const DRIVERS = [
-  { name: "Emeka Obi", email: "emeka@example.com", phone: "+234 803 555 0111" },
-  { name: "Tunde Bakare", email: "tunde@example.com", phone: "+234 805 555 0112" },
-  { name: "Ibrahim Musa", email: "ibrahim@example.com", phone: "+234 806 555 0113" },
-  { name: "Chinedu Eze", email: "chinedu@example.com", phone: "+234 807 555 0114" },
-  { name: "Segun Adeyemi", email: "segun@example.com", phone: "+234 808 555 0115" },
-  { name: "Yusuf Abdullahi", email: "yusuf@example.com", phone: "+234 809 555 0116" },
-  { name: "Blessing Okafor", email: "blessing@example.com", phone: "+234 810 555 0117" },
+  { name: "Emeka Obi", email: "emeka@gmail.com", phone: "+234 803 555 0111" },
+  { name: "Tunde Bakare", email: "tunde@gmail.com", phone: "+234 805 555 0112" },
+  { name: "Ibrahim Musa", email: "ibrahim@gmail.com", phone: "+234 806 555 0113" },
+  { name: "Chinedu Eze", email: "chinedu@gmail.com", phone: "+234 807 555 0114" },
+  { name: "Segun Adeyemi", email: "segun@gmail.com", phone: "+234 808 555 0115" },
+  { name: "Yusuf Abdullahi", email: "yusuf@gmail.com", phone: "+234 809 555 0116" },
+  { name: "Blessing Okafor", email: "blessing@gmail.com", phone: "+234 810 555 0117" },
 ];
 
 const VEHICLES = [
