@@ -21,7 +21,7 @@ import type { Position } from "../utils/geo";
 export const SEED_PASSWORD = "password123";
 export const SEED_MANAGER = {
   name: "Adaeze Okonkwo",
-  email: "manager@example.com",
+  email: "manager@gmail.com",
   phone: "+234 803 555 0101",
 };
 
