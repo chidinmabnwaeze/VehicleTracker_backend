@@ -3,3 +3,4 @@ dist/
 .env
 *serviceAccount*.json
 *service-account*.json
+*smartrack-c5ab3-firebase-adminsdk-*.json
